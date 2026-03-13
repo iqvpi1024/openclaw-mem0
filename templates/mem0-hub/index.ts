@@ -234,6 +234,38 @@ function bindSenderHint(ctx: any, senderId: string): string {
   return userId;
 }
 
+function buildSearchUserIds(resolvedUserId: string, ctx: any, hintedSenderId?: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const pushId = (value: unknown) => {
+    const normalized = normalizeId(value);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    out.push(normalized);
+  };
+
+  const channel = normalizeId(ctx?.channelId) || "unknown";
+  pushId(resolvedUserId);
+
+  const senderId =
+    normalizeId(hintedSenderId) ||
+    extractSenderIdFromUserId(resolvedUserId) ||
+    extractSenderIdFromCandidates(collectSenderCandidates(undefined, ctx), channel);
+
+  if (senderId) {
+    const knownUserId = resolveKnownUserBySender(senderId);
+    pushId(knownUserId);
+    pushId(buildIngressUserId(channel, senderId));
+    // Cross-channel fallback: same sender may have legacy memories under different channel prefixes.
+    pushId(buildIngressUserId("feishu", senderId));
+    pushId(buildIngressUserId("webchat", senderId));
+  }
+
+  return out;
+}
+
 function resolveIngressUserId(event: any, ctx: any): string {
   const channel = normalizeId(ctx?.channelId) || "unknown";
   const senderId = extractSenderIdFromCandidates(collectSenderCandidates(event, ctx), channel);
@@ -748,6 +780,52 @@ async function addMemory(
   );
 }
 
+async function searchMemoriesWithFallback(
+  cfg: ReturnType<typeof buildPluginConfig>,
+  query: string,
+  candidateUserIds: string[],
+): Promise<string[]> {
+  const merged: string[] = [];
+  const seen = new Set<string>();
+  const uniqueUserIds = [...new Set(candidateUserIds.map((id) => normalizeId(id)).filter(Boolean))];
+  let anySucceeded = false;
+  let lastError: unknown = null;
+
+  for (const userId of uniqueUserIds) {
+    try {
+      const payload = await postJson(
+        `${cfg.mem0Url}/memory/search`,
+        {
+          user_id: userId,
+          query,
+          limit: cfg.searchLimit,
+        },
+        cfg.searchTimeoutMs,
+      );
+      anySucceeded = true;
+      const memories = collectTopMemories(payload, cfg.searchLimit);
+      for (const memory of memories) {
+        if (seen.has(memory)) {
+          continue;
+        }
+        seen.add(memory);
+        merged.push(memory);
+        if (merged.length >= cfg.searchLimit) {
+          return merged;
+        }
+      }
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  if (!anySucceeded) {
+    throw lastError ?? new Error("mem0-hub: search failed for all candidate user_ids");
+  }
+
+  return merged;
+}
+
 const plugin = {
   id: "mem0-hub",
   name: "Mem0 Hub",
@@ -816,6 +894,7 @@ const plugin = {
       if (userId.startsWith("session:")) {
         safeLogWarn(api, `mem0-hub: unresolved sender identity, fallback user_id=${userId}`);
       }
+      const candidateUserIds = buildSearchUserIds(userId, ctx, extractedSenderId);
 
       const promptDedupeKey = buildDedupeKey(userId, prompt, "prompt");
       if (rememberDedupe(promptDedupeKey)) {
@@ -841,17 +920,7 @@ const plugin = {
       }
 
       try {
-        const searchPayload = await postJson(
-          `${cfg.mem0Url}/memory/search`,
-          {
-            user_id: userId,
-            query: prompt,
-            limit: cfg.searchLimit,
-          },
-          cfg.searchTimeoutMs,
-        );
-
-        const memories = collectTopMemories(searchPayload, cfg.searchLimit);
+        const memories = await searchMemoriesWithFallback(cfg, prompt, candidateUserIds);
         return {
           prependSystemContext: formatMem0PrioritySystemBlock(memories, false),
         };
