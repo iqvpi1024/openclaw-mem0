@@ -87,6 +87,25 @@ function buildIngressUserId(channel: string, senderId: string): string {
   return `ingress:${normalizedChannel}:sender:${normalizedSenderId}`;
 }
 
+function buildIngressAccountUserId(channel: string, accountId: string): string {
+  const normalizedChannel = normalizeId(channel) || "unknown";
+  const normalizedAccountId = normalizeId(accountId);
+  if (!normalizedAccountId) {
+    return `ingress:${normalizedChannel}:anonymous`;
+  }
+  return `ingress:${normalizedChannel}:account:${normalizedAccountId}`;
+}
+
+function shouldUseAccountIdentityFallback(channel: string): boolean {
+  const normalizedChannel = normalizeId(channel);
+  return (
+    normalizedChannel === "agent" ||
+    normalizedChannel === "webchat" ||
+    normalizedChannel === "terminal" ||
+    normalizedChannel === "cli"
+  );
+}
+
 function extractSenderIdFromUserId(userId: unknown): string {
   const normalized = normalizeId(userId);
   if (!normalized) {
@@ -122,11 +141,17 @@ function collectSenderCandidates(event: any, ctx: any): unknown[] {
     event?.metadata?.sender_id,
     event?.metadata?.senderOpenId,
     event?.metadata?.sender_open_id,
+    event?.metadata?.sender?.id,
+    event?.metadata?.sender?.open_id,
+    event?.metadata?.sender?.sender_id,
+    event?.metadata?.operator?.open_id,
+    event?.metadata?.from?.id,
     event?.senderId,
     event?.sender_id,
     event?.senderOpenId,
     event?.sender_open_id,
     event?.from,
+    event?.user,
     event?.userId,
     event?.user_id,
     ctx?.senderId,
@@ -134,17 +159,55 @@ function collectSenderCandidates(event: any, ctx: any): unknown[] {
     ctx?.senderOpenId,
     ctx?.sender_open_id,
     ctx?.from,
+    ctx?.user,
     ctx?.userId,
     ctx?.user_id,
     ctx?.metadata?.senderId,
     ctx?.metadata?.sender_id,
     ctx?.metadata?.senderOpenId,
     ctx?.metadata?.sender_open_id,
+    ctx?.metadata?.sender?.id,
+    ctx?.metadata?.sender?.open_id,
+    ctx?.metadata?.from?.id,
     ctx?.state?.senderId,
     ctx?.state?.sender_id,
     ctx?.state?.senderOpenId,
     ctx?.state?.sender_open_id,
+    ctx?.state?.sender?.id,
+    ctx?.state?.sender?.open_id,
   ];
+}
+
+function extractSenderIdFromSessionArtifacts(ctx: any): string {
+  const sessionCandidates = [
+    ctx?.sessionKey,
+    ctx?.sessionId,
+    ctx?.metadata?.sessionKey,
+    ctx?.metadata?.sessionId,
+    ctx?.state?.sessionKey,
+    ctx?.state?.sessionId,
+  ];
+
+  const patterns = [
+    /\bopenai-user:([a-z0-9_.:@-]{2,256})/i,
+    /\buser:([a-z0-9_.:@-]{2,256})/i,
+  ];
+
+  for (const candidate of sessionCandidates) {
+    const text = normalizeId(candidate);
+    if (!text) {
+      continue;
+    }
+    for (const pattern of patterns) {
+      const matched = text.match(pattern);
+      const senderId = normalizeId(matched?.[1]);
+      if (senderId) {
+        return senderId;
+      }
+    }
+  }
+
+  return "";
 }
 
 function extractSenderIdFromCandidates(candidates: unknown[], channel: string): string {
@@ -187,6 +250,24 @@ function resolveAccountBindingKeys(ctx: any): string[] {
   }
 
   return out;
+}
+
+function resolveContextAccountId(ctx: any): string {
+  const accountCandidates = [
+    ctx?.accountId,
+    ctx?.account_id,
+    ctx?.metadata?.accountId,
+    ctx?.metadata?.account_id,
+    ctx?.state?.accountId,
+    ctx?.state?.account_id,
+  ];
+  for (const candidate of accountCandidates) {
+    const accountId = normalizeId(candidate);
+    if (accountId) {
+      return accountId;
+    }
+  }
+  return "";
 }
 
 function resolveKnownUserBySender(senderId: unknown): string {
@@ -234,7 +315,7 @@ function bindSenderHint(ctx: any, senderId: string): string {
   return userId;
 }
 
-function buildSearchUserIds(resolvedUserId: string, ctx: any, hintedSenderId?: string): string[] {
+function buildSearchUserIds(resolvedUserId: string, ctx: any, hintedSenderId?: string, event?: any): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const pushId = (value: unknown) => {
@@ -252,7 +333,8 @@ function buildSearchUserIds(resolvedUserId: string, ctx: any, hintedSenderId?: s
   const senderId =
     normalizeId(hintedSenderId) ||
     extractSenderIdFromUserId(resolvedUserId) ||
-    extractSenderIdFromCandidates(collectSenderCandidates(undefined, ctx), channel);
+    extractSenderIdFromSessionArtifacts(ctx) ||
+    extractSenderIdFromCandidates(collectSenderCandidates(event, ctx), channel);
 
   if (senderId) {
     const knownUserId = resolveKnownUserBySender(senderId);
@@ -261,6 +343,13 @@ function buildSearchUserIds(resolvedUserId: string, ctx: any, hintedSenderId?: s
     // Cross-channel fallback: same sender may have legacy memories under different channel prefixes.
     pushId(buildIngressUserId("feishu", senderId));
     pushId(buildIngressUserId("webchat", senderId));
+  }
+
+  const boundByAccount = resolveKnownUserByAccount(ctx);
+  pushId(boundByAccount);
+  const accountId = resolveContextAccountId(ctx);
+  if (accountId && shouldUseAccountIdentityFallback(channel)) {
+    pushId(buildIngressAccountUserId(channel, accountId));
   }
 
   return out;
@@ -275,6 +364,16 @@ function resolveIngressUserId(event: any, ctx: any): string {
       return knownUserId;
     }
     return buildIngressUserId(channel, senderId);
+  }
+
+  const boundByAccount = resolveKnownUserByAccount(ctx);
+  if (boundByAccount) {
+    return boundByAccount;
+  }
+
+  const accountId = resolveContextAccountId(ctx);
+  if (accountId && shouldUseAccountIdentityFallback(channel)) {
+    return buildIngressAccountUserId(channel, accountId);
   }
 
   const conversation = normalizeId(ctx?.conversationId);
@@ -423,20 +522,31 @@ function bindSessionUser(ctx: any, userId: string): void {
   }
 }
 
-function resolveSessionUserId(ctx: any): string {
+function resolveSessionUserId(ctx: any, event?: any): string {
   const now = Date.now();
   pruneExpiredBindings(now);
 
   const channel = normalizeId(ctx?.channelId) || "unknown";
-  const senderId = extractSenderIdFromCandidates(collectSenderCandidates(undefined, ctx), channel);
+  const senderId = extractSenderIdFromCandidates(collectSenderCandidates(event, ctx), channel);
   if (senderId) {
     const knownUserId = resolveKnownUserBySender(senderId);
     return knownUserId || buildIngressUserId(channel, senderId);
   }
 
+  const senderFromSession = extractSenderIdFromSessionArtifacts(ctx);
+  if (senderFromSession) {
+    const knownUserId = resolveKnownUserBySender(senderFromSession);
+    return knownUserId || buildIngressUserId(channel, senderFromSession);
+  }
+
   const boundByAccount = resolveKnownUserByAccount(ctx);
   if (boundByAccount) {
     return boundByAccount;
+  }
+
+  const accountId = resolveContextAccountId(ctx);
+  if (accountId && shouldUseAccountIdentityFallback(channel)) {
+    return buildIngressAccountUserId(channel, accountId);
   }
 
   const conversationKey = resolveConversationBindingKey(ctx);
@@ -652,6 +762,50 @@ function extractSenderIdFromPrompt(prompt: string): string {
   const genericSenderId = normalizeId(genericSenderMatch?.[0]);
   if (genericSenderId) {
     return genericSenderId;
+  }
+  return "";
+}
+
+function extractPromptMemoryText(prompt: string): string {
+  const raw = trimText(prompt);
+  if (!raw) {
+    return "";
+  }
+
+  // Skip prompt-like/meta-heavy payloads that pollute memory quality.
+  if (
+    /You are a smart memory manager|Do not return anything except the JSON format|Conversation info \(untrusted metadata\)|```json/i.test(
+      raw,
+    )
+  ) {
+    const lines = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const line = lines[i];
+      const matched = line.match(/^([^:\n]{1,40}):\s*(.+)$/);
+      if (!matched) {
+        continue;
+      }
+      const speaker = matched[1].trim();
+      const content = matched[2].trim();
+      if (!content) {
+        continue;
+      }
+      if (/^(AI回答|用户问题|Sender|Conversation info|\[message_id|message_id|timestamp|id|label)$/i.test(speaker)) {
+        continue;
+      }
+      if (/^ou_[a-z0-9_:-]+$/i.test(speaker)) {
+        continue;
+      }
+      return content.slice(0, 500);
+    }
+    return "";
+  }
+
+  if (raw.length <= 500) {
+    return raw;
   }
   return "";
 }
@@ -885,23 +1039,33 @@ const plugin = {
         return;
       }
 
+      const channel = normalizeId(ctx?.channelId) || "unknown";
+      const senderFromEvent = extractSenderIdFromCandidates(collectSenderCandidates(event, ctx), channel);
+      if (senderFromEvent) {
+        bindSenderHint(ctx, senderFromEvent);
+      }
+
       const extractedSenderId = extractSenderIdFromPrompt(prompt);
       if (extractedSenderId) {
         bindSenderHint(ctx, extractedSenderId);
       }
 
-      const userId = resolveSessionUserId(ctx);
-      if (userId.startsWith("session:")) {
+      const userId = resolveSessionUserId(ctx, event);
+      const isSessionFallback = userId.startsWith("session:");
+      if (isSessionFallback) {
         safeLogWarn(api, `mem0-hub: unresolved sender identity, fallback user_id=${userId}`);
       }
-      const candidateUserIds = buildSearchUserIds(userId, ctx, extractedSenderId);
+      const candidateUserIds = buildSearchUserIds(userId, ctx, extractedSenderId, event);
+      const promptMemoryText = extractPromptMemoryText(prompt);
 
-      const promptDedupeKey = buildDedupeKey(userId, prompt, "prompt");
-      if (rememberDedupe(promptDedupeKey)) {
+      const promptDedupeKey = buildDedupeKey(userId, promptMemoryText, "prompt");
+      if (promptMemoryText && isSessionFallback) {
+        safeLogWarn(api, `mem0-hub: skip prompt add due to unresolved user identity: ${userId}`);
+      } else if (promptMemoryText && rememberDedupe(promptDedupeKey)) {
         void addMemory(
           cfg,
           userId,
-          prompt,
+          promptMemoryText,
           buildAddMetadata({
             stage: "before_prompt_build",
             sessionKey: normalizeId(ctx?.sessionKey),
@@ -953,10 +1117,17 @@ const plugin = {
         bindSenderHint(ctx, hintedSenderId);
       }
 
+      const channel = normalizeId(ctx?.channelId) || "unknown";
+      const senderFromEvent = extractSenderIdFromCandidates(collectSenderCandidates(event, ctx), channel);
+      if (senderFromEvent) {
+        bindSenderHint(ctx, senderFromEvent);
+      }
+
       const qaPair = `用户问题：${userText}\nAI回答：${assistantText}`;
-      const userId = resolveSessionUserId(ctx);
+      const userId = resolveSessionUserId(ctx, event);
       if (userId.startsWith("session:")) {
         safeLogWarn(api, `mem0-hub: agent_end fallback user_id=${userId}`);
+        return;
       }
       const dedupeKey = buildDedupeKey(userId, qaPair, "qa");
       if (!rememberDedupe(dedupeKey)) {
