@@ -1,4 +1,4 @@
-# OpenClaw-Mem0: 4G 低配服务器不失忆终极方案
+# OpenClaw-Mem0: OpenClaw 记忆增强终极方案（Mem0 First）
 
 <p align="center">
   <a href="https://github.com/iqvpi1024/openclaw-mem0/stargazers">
@@ -14,7 +14,7 @@
   <img src="https://img.shields.io/badge/Embedding-BAAI%2Fbge--large--zh--v1.5-purple?style=for-the-badge" alt="BGE" />
 </p>
 
-> 一句话：把 OpenClaw 从“容易失忆的会话机器人”，改造成“后端强制检索 + 自动回写的长期记忆体”。
+> 一句话：把 OpenClaw 从“会话记忆”升级成“Mem0 第一记忆源”，让记忆检索和回写变成后端强制动作。
 
 ## 痛点暴击
 
@@ -24,9 +24,9 @@
 | 🧠 记忆持久化 | 主要靠文件或会话上下文 | 用户输入 + 模型回答双向回写 |
 | 🧩 语义理解 | 文本堆积，检索弱 | 向量语义检索（`bge-large-zh-v1.5`） |
 | 🔁 多端同步 | Mac / Linux / 飞书记忆割裂 | 统一 `user_id` 可跨端共享同一记忆 |
-| 🐏 低配可用性 | 4G 机器容易 OOM | Swap + 单 Worker + 限并发稳定运行 |
+| ⚙️ 可扩展性 | 检索链路与模型链路耦合重 | 可按场景拆分为中心 Mem0 + 多节点 OpenClaw |
 
-## 架构揭秘（4G 机器也能跑）
+## 架构揭秘
 
 ```mermaid
 flowchart LR
@@ -52,7 +52,7 @@ flowchart LR
 
 1. 多个 OpenClaw 指向同一个 Mem0 后端（或本地 sidecar 转发到中心 Mem0）。
 2. 全节点统一 embedding 模型版本（`BAAI/bge-large-zh-v1.5`）。
-3. 全节点统一 `user_id` 归一化规则（例如 `tenant:acme:user:zhaojie`）。
+3. 全节点统一 `user_id` 归一化规则（例如 `tenant:acme:user:user001`）。
 
 这样你在 Mac 说过的话，Linux 上新会话也能被召回。
 
@@ -136,7 +136,7 @@ bash status_stack.sh
 `mem0 .env` 关键项：
 
 ```env
-OPENAI_API_KEY=openclaw-local
+OPENAI_API_KEY=<OPENCLAW_GATEWAY_KEY_OR_DUMMY>
 OPENAI_BASE_URL=http://127.0.0.1:18789/v1
 MEM0_LLM_PROVIDER=openai
 MEM0_LLM_MODEL=kimicode/kimi-k2.5
@@ -148,20 +148,41 @@ MEM0_HISTORY_DB_PATH=./data/history-openclaw-v2.db
 MEM0_COLLECTION_NAME=mem0
 ```
 
+## 高性能部署方案（本地向量模型升级）
+
+如果你的目标是更高吞吐和更强召回质量，建议把 embedding 层独立成服务，并升级模型：
+
+1. 模型选择：
+`BAAI/bge-large-zh-v1.5`（当前默认，中文稳定）或 `BAAI/bge-m3`（多语种/长文本更强）。
+2. 服务拆分：
+OpenClaw、Mem0 API、向量数据库（Qdrant）分开部署，避免单进程争抢资源。
+3. 检索参数：
+`searchLimit` 建议 `5~8`，并配合结果去重，降低噪声注入。
+4. 高性能节点建议：
+`8C16G+` 起步，若有 GPU 可将 embedding 推理迁移到 GPU 服务。
+
+示例（切换到 `bge-m3`）：
+
+```env
+MEM0_EMBEDDER_PROVIDER=huggingface
+MEM0_EMBEDDER_MODEL=BAAI/bge-m3
+MEM0_EMBEDDING_DIMS=1024
+```
+
 ## 验收
 
 ```bash
 curl -s http://127.0.0.1:8765/health
-curl -s -X POST http://127.0.0.1:8765/memory/add -H 'content-type: application/json' -d '{"user_id":"diag-001","text":"我叫赵杰","infer":false}'
-curl -s -X POST http://127.0.0.1:8765/memory/search -H 'content-type: application/json' -d '{"user_id":"diag-001","query":"我叫什么","limit":5}'
+curl -s -X POST http://127.0.0.1:8765/memory/add -H 'content-type: application/json' -d '{"user_id":"diag-001","text":"我的昵称是测试用户A","infer":false}'
+curl -s -X POST http://127.0.0.1:8765/memory/search -H 'content-type: application/json' -d '{"user_id":"diag-001","query":"我的昵称是什么","limit":5}'
 ```
 
 飞书验证：
 
 1. `/new`
-2. `我叫赵杰，今年25岁`
-3. `我公司是扬州蜗风网络科技有限公司`
-4. `我公司抬头是什么，我明年多大？`
+2. `我叫测试用户A，我在做一个自动化项目`
+3. `我的项目代号是 Orion，默认回复中文`
+4. `我项目代号是什么？默认回复什么语言？`
 
 ## 已踩过的坑（你不用再踩）
 
@@ -182,7 +203,7 @@ curl -s -X POST http://127.0.0.1:8765/memory/search -H 'content-type: applicatio
 
 ## 赞赏区
 
-为了榨干 4G 服务器性能跑通这套全自动记忆流，熬了不少大夜。  
+为了把这套全自动记忆流跑稳，我熬了不少大夜。  
 如果这个方案治好了你的 AI 失忆症，或者帮你省下了高配服务器的钱，欢迎请我喝杯咖啡 ☕️，支持我持续维护。
 
 | 微信赞赏 | 支付宝赞赏 |

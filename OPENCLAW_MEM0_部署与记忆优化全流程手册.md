@@ -25,7 +25,7 @@
 - [7. 多环境共享记忆（Mac + Linux）](#7-多环境共享记忆mac--linux)
 - [8. 端到端验收](#8-端到端验收)
 - [9. 实战踩坑与修复](#9-实战踩坑与修复)
-- [10. 4G 内存机器优化建议](#10-4g-内存机器优化建议)
+- [10. 资源优化与高性能扩展](#10-资源优化与高性能扩展)
 - [11. 安全与开源发布建议](#11-安全与开源发布建议)
 - [12. 一键排障清单](#12-一键排障清单)
 - [13. FAQ](#13-faq)
@@ -56,7 +56,7 @@
 - Mem0 使用 `BAAI/bge-large-zh-v1.5` 进行中文向量化。
 - LLM 使用 Kimi（`kimi-k2.5`）。
 - `/new` 后不会丢记忆，仍可从 Mem0 召回历史事实。
-- 4G 机器可稳定运行（Swap + 单 worker + 限流）。
+- 在低内存机器可稳定运行，同时支持高性能扩展架构。
 - 可扩展成多节点（macOS + Linux）共享一个中心记忆库。
 
 ---
@@ -144,7 +144,7 @@ cd /root/mem0-local
 
 ## 5. Step-by-Step 部署
 
-## 5.1 创建 4GB Swap（4G 机器必做）
+## 5.1 可选：创建 4GB Swap（低内存机器建议）
 
 目标：防止 embedding 首次加载和并发阶段 OOM。
 
@@ -358,7 +358,7 @@ curl -s http://127.0.0.1:8765/health
 }
 ```
 
-### 默认 Agent 并发限制（4G 机器）
+### 默认 Agent 并发限制（稳态优先）
 
 ```json
 "agents": {
@@ -571,9 +571,9 @@ tenant:<tenant_id>:user:<global_user_id>
 
 映射示例：
 
-- 飞书 `ou_xxx` -> `tenant:acme:user:zhaojie`
-- 终端账号 `zhaojie@mac` -> `tenant:acme:user:zhaojie`
-- Web 登录 uid `10086` -> `tenant:acme:user:zhaojie`
+- 飞书 `ou_xxx` -> `tenant:acme:user:user001`
+- 终端账号 `dev@mac` -> `tenant:acme:user:user001`
+- Web 登录 uid `10086` -> `tenant:acme:user:user001`
 
 不要直接把渠道 ID 当最终 user_id，应该先经过“身份映射表”。
 
@@ -615,11 +615,11 @@ systemctl is-active ensure-swap-4g.service openclaw-gateway.service mem0-local.s
 curl -s http://127.0.0.1:8765/health
 curl -s -X POST http://127.0.0.1:8765/memory/add \
   -H 'content-type: application/json' \
-  -d '{"user_id":"diag-001","text":"我叫赵杰","infer":false}'
+  -d '{"user_id":"diag-001","text":"我的昵称是测试用户A","infer":false}'
 
 curl -s -X POST http://127.0.0.1:8765/memory/search \
   -H 'content-type: application/json' \
-  -d '{"user_id":"diag-001","query":"我叫什么","limit":5}'
+  -d '{"user_id":"diag-001","query":"我的昵称是什么","limit":5}'
 ```
 
 ## 8.3 飞书验收脚本
@@ -627,14 +627,14 @@ curl -s -X POST http://127.0.0.1:8765/memory/search \
 按顺序发送：
 
 1. `/new`
-2. `我叫赵杰，今年25岁`
-3. `我公司是扬州蜗风网络科技有限公司`
-4. `我公司抬头是什么，我明年多大？`
+2. `我叫测试用户A，我在做一个自动化项目`
+3. `我的项目代号是 Orion，默认回复中文`
+4. `我项目代号是什么？默认回复什么语言？`
 
 预期：
 
-- 能答出公司名。
-- 年龄可推导为 26（或提示缺出生日期，逻辑一致即可）。
+- 能答出项目代号。
+- 能答出默认回复语言。
 - Mem0 日志有 `message_received -> search -> agent_end` 三段链路。
 
 ---
@@ -712,21 +712,44 @@ curl -s -X POST http://127.0.0.1:8765/memory/search \
 
 ---
 
-## 10. 4G 内存机器优化建议
+## 10. 资源优化与高性能扩展
 
-必须执行：
+### 10.1 稳态运行建议（通用）
 
-1. Swap >= 4GB。
-2. OpenClaw 并发：`maxConcurrent=1`。
-3. Mem0 uvicorn workers：`1`。
-4. 工具并发和媒体并发限制为 `1`。
-5. 先启动 OpenClaw，再启动 Mem0，避免资源争抢。
+1. OpenClaw 并发：`maxConcurrent=1`（先保证稳定）。
+2. Mem0 uvicorn workers：`1`（避免资源争抢）。
+3. 工具并发和媒体并发限制为 `1`。
+4. 启动顺序建议：OpenClaw -> Mem0。
+5. 若机器内存较小，启用 Swap（例如 4GB）。
 
-可选优化：
+### 10.2 高性能部署方案（本地向量模型升级）
 
-- 使用更轻量 embedding（如 `bge-small`）换取速度。
-- 设置 systemd `MemoryMax` 防止机器被打爆。
-- 给日志做轮转，避免磁盘写满。
+目标：提升检索质量与吞吐，保持“Mem0 第一记忆源”主链路不变。
+
+推荐路线：
+
+1. Embedding 模型升级：
+- 默认稳定：`BAAI/bge-large-zh-v1.5`
+- 高性能推荐：`BAAI/bge-m3`（多语种、长文本场景更优）
+
+2. 服务拆分：
+- OpenClaw（推理编排）
+- Mem0 API（记忆编排）
+- 向量数据库（Qdrant 独立节点）
+- Embedding 推理服务（可独立 CPU/GPU 部署）
+
+3. 配置建议：
+- `searchLimit` 建议 `5~8`
+- 增加检索结果去重/截断，减少噪声注入
+- 对写入和检索设置独立超时与重试策略
+
+4. 示例（切换至 `bge-m3`）：
+
+```env
+MEM0_EMBEDDER_PROVIDER=huggingface
+MEM0_EMBEDDER_MODEL=BAAI/bge-m3
+MEM0_EMBEDDING_DIMS=1024
+```
 
 ---
 
@@ -863,4 +886,3 @@ MIT License
 4. openclaw、mem0、swap 三个服务均 `active` 且开机自启。
 5. 配置与仓库内无明文密钥。
 6. 若启用多节点，共享用户在不同设备能互相召回同一记忆。
-
