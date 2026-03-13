@@ -12,6 +12,8 @@ const BLOCKED_LEGACY_MEMORY_TOOLS = new Set(["memory_search", "memory_get", "mem
 const dedupeCache = new Map<string, number>();
 const sessionUserBinding = new Map<string, { userId: string; expiresAt: number }>();
 const conversationUserBinding = new Map<string, { userId: string; expiresAt: number }>();
+const senderUserBinding = new Map<string, { userId: string; expiresAt: number }>();
+const accountUserBinding = new Map<string, { userId: string; expiresAt: number }>();
 
 function trimText(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -76,26 +78,171 @@ function normalizeId(value: unknown): string {
   return text.replace(/\s+/g, " ").slice(0, 256);
 }
 
-function resolveIngressUserId(event: any, ctx: any): string {
-  const channel = normalizeId(ctx?.channelId) || "unknown";
-  const senderCandidates = [
+function buildIngressUserId(channel: string, senderId: string): string {
+  const normalizedChannel = normalizeId(channel) || "unknown";
+  const normalizedSenderId = normalizeId(senderId);
+  if (!normalizedSenderId) {
+    return `ingress:${normalizedChannel}:anonymous`;
+  }
+  return `ingress:${normalizedChannel}:sender:${normalizedSenderId}`;
+}
+
+function extractSenderIdFromUserId(userId: unknown): string {
+  const normalized = normalizeId(userId);
+  if (!normalized) {
+    return "";
+  }
+  const marker = ":sender:";
+  const index = normalized.indexOf(marker);
+  if (index < 0) {
+    return "";
+  }
+  return normalizeId(normalized.slice(index + marker.length));
+}
+
+function normalizeSenderCandidate(value: unknown, channel: string): string {
+  const raw = normalizeId(value);
+  if (!raw) {
+    return "";
+  }
+  const senderFromUserId = extractSenderIdFromUserId(raw);
+  if (senderFromUserId) {
+    return senderFromUserId;
+  }
+  const prefix = `${channel}:`;
+  if (raw.startsWith(prefix)) {
+    return normalizeId(raw.slice(prefix.length));
+  }
+  return raw;
+}
+
+function collectSenderCandidates(event: any, ctx: any): unknown[] {
+  return [
     event?.metadata?.senderId,
+    event?.metadata?.sender_id,
+    event?.metadata?.senderOpenId,
+    event?.metadata?.sender_open_id,
     event?.senderId,
+    event?.sender_id,
+    event?.senderOpenId,
+    event?.sender_open_id,
     event?.from,
+    event?.userId,
+    event?.user_id,
     ctx?.senderId,
+    ctx?.sender_id,
     ctx?.senderOpenId,
+    ctx?.sender_open_id,
     ctx?.from,
     ctx?.userId,
+    ctx?.user_id,
+    ctx?.metadata?.senderId,
+    ctx?.metadata?.sender_id,
+    ctx?.metadata?.senderOpenId,
+    ctx?.metadata?.sender_open_id,
+    ctx?.state?.senderId,
+    ctx?.state?.sender_id,
+    ctx?.state?.senderOpenId,
+    ctx?.state?.sender_open_id,
   ];
-  for (const candidate of senderCandidates) {
-    const sender = normalizeId(candidate);
-    if (!sender) {
+}
+
+function extractSenderIdFromCandidates(candidates: unknown[], channel: string): string {
+  for (const candidate of candidates) {
+    const senderId = normalizeSenderCandidate(candidate, channel);
+    if (senderId) {
+      return senderId;
+    }
+  }
+  return "";
+}
+
+function resolveAccountBindingKeys(ctx: any): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const channel = normalizeId(ctx?.channelId);
+  const accountCandidates = [
+    ctx?.accountId,
+    ctx?.account_id,
+    ctx?.metadata?.accountId,
+    ctx?.metadata?.account_id,
+    ctx?.state?.accountId,
+    ctx?.state?.account_id,
+  ];
+
+  for (const candidate of accountCandidates) {
+    const accountId = normalizeId(candidate);
+    if (!accountId || seen.has(accountId)) {
       continue;
     }
-    const prefix = `${channel}:`;
-    const normalizedSender = sender.startsWith(prefix) ? sender.slice(prefix.length) : sender;
-    const senderId = normalizeId(normalizedSender) || sender;
-    return `ingress:${channel}:sender:${senderId}`;
+    seen.add(accountId);
+    out.push(accountId);
+    if (channel) {
+      const channelScoped = `${channel}:${accountId}`;
+      if (!seen.has(channelScoped)) {
+        seen.add(channelScoped);
+        out.push(channelScoped);
+      }
+    }
+  }
+
+  return out;
+}
+
+function resolveKnownUserBySender(senderId: unknown): string {
+  const normalizedSenderId = normalizeId(senderId);
+  if (!normalizedSenderId) {
+    return "";
+  }
+  const record = senderUserBinding.get(normalizedSenderId);
+  if (!record) {
+    return "";
+  }
+  if (record.expiresAt <= Date.now()) {
+    senderUserBinding.delete(normalizedSenderId);
+    return "";
+  }
+  return record.userId;
+}
+
+function resolveKnownUserByAccount(ctx: any): string {
+  const now = Date.now();
+  const keys = resolveAccountBindingKeys(ctx);
+  for (const key of keys) {
+    const record = accountUserBinding.get(key);
+    if (!record) {
+      continue;
+    }
+    if (record.expiresAt <= now) {
+      accountUserBinding.delete(key);
+      continue;
+    }
+    return record.userId;
+  }
+  return "";
+}
+
+function bindSenderHint(ctx: any, senderId: string): string {
+  const normalizedSenderId = normalizeId(senderId);
+  if (!normalizedSenderId) {
+    return "";
+  }
+  const knownUserId = resolveKnownUserBySender(normalizedSenderId);
+  const channel = normalizeId(ctx?.channelId) || "unknown";
+  const userId = knownUserId || buildIngressUserId(channel, normalizedSenderId);
+  bindSessionUser(ctx, userId);
+  return userId;
+}
+
+function resolveIngressUserId(event: any, ctx: any): string {
+  const channel = normalizeId(ctx?.channelId) || "unknown";
+  const senderId = extractSenderIdFromCandidates(collectSenderCandidates(event, ctx), channel);
+  if (senderId) {
+    const knownUserId = resolveKnownUserBySender(senderId);
+    if (knownUserId) {
+      return knownUserId;
+    }
+    return buildIngressUserId(channel, senderId);
   }
 
   const conversation = normalizeId(ctx?.conversationId);
@@ -184,6 +331,18 @@ function pruneExpiredBindings(now: number): void {
       conversationUserBinding.delete(key);
     }
   }
+
+  for (const [key, record] of senderUserBinding) {
+    if (record.expiresAt <= now) {
+      senderUserBinding.delete(key);
+    }
+  }
+
+  for (const [key, record] of accountUserBinding) {
+    if (record.expiresAt <= now) {
+      accountUserBinding.delete(key);
+    }
+  }
 }
 
 function bindSessionUser(ctx: any, userId: string): void {
@@ -211,28 +370,41 @@ function bindSessionUser(ctx: any, userId: string): void {
       expiresAt,
     });
   }
+
+  const accountBindingKeys = resolveAccountBindingKeys(ctx);
+  for (const accountKey of accountBindingKeys) {
+    accountUserBinding.set(accountKey, {
+      userId: boundUserId,
+      expiresAt,
+    });
+  }
+
+  const channel = normalizeId(ctx?.channelId) || "unknown";
+  const senderId =
+    extractSenderIdFromUserId(boundUserId) ||
+    extractSenderIdFromCandidates(collectSenderCandidates(undefined, ctx), channel);
+  if (senderId) {
+    senderUserBinding.set(senderId, {
+      userId: boundUserId,
+      expiresAt,
+    });
+  }
 }
 
 function resolveSessionUserId(ctx: any): string {
   const now = Date.now();
   pruneExpiredBindings(now);
 
-  const senderRaw =
-    normalizeId(ctx?.senderId) ||
-    normalizeId(ctx?.senderOpenId) ||
-    normalizeId(ctx?.from) ||
-    normalizeId(ctx?.userId) ||
-    normalizeId(ctx?.metadata?.senderId) ||
-    normalizeId(ctx?.metadata?.senderOpenId) ||
-    normalizeId(ctx?.state?.senderId) ||
-    normalizeId(ctx?.state?.senderOpenId);
   const channel = normalizeId(ctx?.channelId) || "unknown";
-  if (senderRaw) {
-    const prefix = `${channel}:`;
-    const normalizedSender = senderRaw.startsWith(prefix) ? senderRaw.slice(prefix.length) : senderRaw;
-    const senderId = normalizeId(normalizedSender) || senderRaw;
-    // Prefer ingress identity when sender is known so retrieval and writeback share one user_id.
-    return `ingress:${channel}:sender:${senderId}`;
+  const senderId = extractSenderIdFromCandidates(collectSenderCandidates(undefined, ctx), channel);
+  if (senderId) {
+    const knownUserId = resolveKnownUserBySender(senderId);
+    return knownUserId || buildIngressUserId(channel, senderId);
+  }
+
+  const boundByAccount = resolveKnownUserByAccount(ctx);
+  if (boundByAccount) {
+    return boundByAccount;
   }
 
   const conversationKey = resolveConversationBindingKey(ctx);
@@ -430,6 +602,11 @@ function extractSenderIdFromPrompt(prompt: string): string {
     /"sender_id"\s*:\s*"([^"]+)"/i,
     /'sender_id'\s*:\s*'([^']+)'/i,
     /\bsender_id\s*:\s*([a-z0-9_:-]+)/i,
+    /"senderId"\s*:\s*"([^"]+)"/i,
+    /'senderId'\s*:\s*'([^']+)'/i,
+    /"sender_open_id"\s*:\s*"([^"]+)"/i,
+    /"senderOpenId"\s*:\s*"([^"]+)"/i,
+    /"id"\s*:\s*"(ou_[a-z0-9_:-]+)"/i,
   ];
   for (const pattern of patterns) {
     const match = text.match(pattern);
@@ -437,6 +614,12 @@ function extractSenderIdFromPrompt(prompt: string): string {
     if (senderId) {
       return senderId;
     }
+  }
+
+  const genericSenderMatch = text.match(/\bou_[a-z0-9_:-]{8,}\b/i);
+  const genericSenderId = normalizeId(genericSenderMatch?.[0]);
+  if (genericSenderId) {
+    return genericSenderId;
   }
   return "";
 }
@@ -626,11 +809,13 @@ const plugin = {
 
       const extractedSenderId = extractSenderIdFromPrompt(prompt);
       if (extractedSenderId) {
-        const channel = normalizeId(ctx?.channelId) || "unknown";
-        bindSessionUser(ctx, `ingress:${channel}:sender:${extractedSenderId}`);
+        bindSenderHint(ctx, extractedSenderId);
       }
 
       const userId = resolveSessionUserId(ctx);
+      if (userId.startsWith("session:")) {
+        safeLogWarn(api, `mem0-hub: unresolved sender identity, fallback user_id=${userId}`);
+      }
 
       const promptDedupeKey = buildDedupeKey(userId, prompt, "prompt");
       if (rememberDedupe(promptDedupeKey)) {
@@ -694,8 +879,16 @@ const plugin = {
         return;
       }
 
+      const hintedSenderId = extractSenderIdFromPrompt(`${userText}\n${assistantText}`);
+      if (hintedSenderId) {
+        bindSenderHint(ctx, hintedSenderId);
+      }
+
       const qaPair = `用户问题：${userText}\nAI回答：${assistantText}`;
       const userId = resolveSessionUserId(ctx);
+      if (userId.startsWith("session:")) {
+        safeLogWarn(api, `mem0-hub: agent_end fallback user_id=${userId}`);
+      }
       const dedupeKey = buildDedupeKey(userId, qaPair, "qa");
       if (!rememberDedupe(dedupeKey)) {
         return;
