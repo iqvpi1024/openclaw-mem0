@@ -71,30 +71,77 @@ flowchart LR
 
 这套文档就是按“AI 代理可直接执行”的结构写的，不需要二次整理。
 
-## 傻瓜式部署（Ctrl+C / Ctrl+V）
+## 一键部署（Linux / macOS / Windows）
+
+脚本会自动完成：
+
+1. 部署 Mem0 Local API（FastAPI + 向量存储）
+2. 注入 `mem0-hub` 插件到 OpenClaw 扩展目录
+3. 自动改写 `openclaw.json`（强制 Mem0 First）
+4. 启动服务（Linux: systemd，macOS/Windows: 运行脚本）
+
+### Linux
 
 ```bash
-set -euo pipefail
-
 git clone https://github.com/iqvpi1024/openclaw-mem0.git
-cd openclaw-mem0/deploy
+cd openclaw-mem0
+chmod +x deploy/linux/one_click.sh
 
-chmod +x *.sh
-sudo bash ensure_swap_4g.sh
-
-# 需要你提前准备好以下服务文件：
-# /etc/systemd/system/ensure-swap-4g.service
-# /etc/systemd/system/openclaw-gateway.service
-# /etc/systemd/system/mem0-local.service
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now ensure-swap-4g.service
-sudo systemctl enable --now openclaw-gateway.service
-sudo systemctl enable --now mem0-local.service
-
-bash start_stack.sh
-bash status_stack.sh
+KIMI_API_KEY="<YOUR_KIMI_API_KEY>" \
+OPENCLAW_PACKAGE_DIR="/abs/path/to/openclaw/package" \
+bash deploy/linux/one_click.sh
 ```
+
+可选飞书：
+
+```bash
+KIMI_API_KEY="<YOUR_KIMI_API_KEY>" \
+OPENCLAW_PACKAGE_DIR="/abs/path/to/openclaw/package" \
+ENABLE_FEISHU=1 \
+FEISHU_APP_ID="<FEISHU_APP_ID>" \
+FEISHU_APP_SECRET="<FEISHU_APP_SECRET>" \
+bash deploy/linux/one_click.sh
+```
+
+### macOS
+
+```bash
+git clone https://github.com/iqvpi1024/openclaw-mem0.git
+cd openclaw-mem0
+chmod +x deploy/macos/one_click.sh
+
+KIMI_API_KEY="<YOUR_KIMI_API_KEY>" \
+OPENCLAW_PACKAGE_DIR="/abs/path/to/openclaw/package" \
+bash deploy/macos/one_click.sh
+```
+
+### Windows (PowerShell)
+
+```powershell
+git clone https://github.com/iqvpi1024/openclaw-mem0.git
+cd openclaw-mem0
+
+powershell -ExecutionPolicy Bypass -File .\deploy\windows\one_click.ps1 `
+  -OpenClawPackageDir "C:\path\to\openclaw\package" `
+  -KimiApiKey "<YOUR_KIMI_API_KEY>"
+```
+
+可选飞书：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\deploy\windows\one_click.ps1 `
+  -OpenClawPackageDir "C:\path\to\openclaw\package" `
+  -KimiApiKey "<YOUR_KIMI_API_KEY>" `
+  -EnableFeishu `
+  -FeishuAppId "<FEISHU_APP_ID>" `
+  -FeishuAppSecret "<FEISHU_APP_SECRET>"
+```
+
+## 脚本会自动修改的底层文件
+
+1. `~/.openclaw/openclaw.json`
+2. `~/.openclaw/extensions/mem0-hub/index.ts`
+3. `~/mem0-local/mem0_api.py`（Windows 在 `%USERPROFILE%\\mem0-local`）
 
 ## 配置模板
 
@@ -193,6 +240,7 @@ curl -s -X POST http://127.0.0.1:8765/memory/search -H 'content-type: applicatio
 
 ## 文档
 
+- 跨平台脚本说明：[deploy/README.md](./deploy/README.md)
 - 完整部署文档：[OPENCLAW_MEM0_部署与记忆优化全流程手册.md](./OPENCLAW_MEM0_部署与记忆优化全流程手册.md)
 
 ## Star 支持

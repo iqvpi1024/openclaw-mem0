@@ -23,6 +23,7 @@ logs/
 *.log
 run/
 *.pid
+*.bak.*
 
 # Data
 *.db

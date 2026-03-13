@@ -14,7 +14,10 @@
 
 - 完整教程：`OPENCLAW_MEM0_部署与记忆优化全流程手册.md`
 - 快速总览：`README.md`
-- 部署脚本：`deploy/*.sh`
+- 部署脚本：
+  - Linux: `deploy/linux/one_click.sh`
+  - macOS: `deploy/macos/one_click.sh`
+  - Windows: `deploy/windows/one_click.ps1`
 
 ## 代理执行优先顺序
 

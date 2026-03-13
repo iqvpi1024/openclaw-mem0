@@ -29,7 +29,7 @@
 - [11. 安全与开源发布建议](#11-安全与开源发布建议)
 - [12. 一键排障清单](#12-一键排障清单)
 - [13. FAQ](#13-faq)
-- [14. 你发布 GitHub 前需要填写的信息](#14-你发布-github-前需要填写的信息)
+- [14. 开源维护建议](#14-开源维护建议)
 - [15. 许可证与贡献](#15-许可证与贡献)
 
 ---
@@ -139,10 +139,53 @@ cd /root/mem0-local
 - Mem0 API 文件：`/root/mem0-local/mem0_api.py`
 - 插件目录：`/root/.openclaw/extensions/mem0-hub`
 - 部署脚本目录：`/root/openclaw-work/deploy`
+- 跨平台一键脚本：`deploy/linux/one_click.sh`、`deploy/macos/one_click.sh`、`deploy/windows/one_click.ps1`
+- 模板目录：`deploy/common/*`、`templates/mem0-hub/index.ts`
 
 ---
 
 ## 5. Step-by-Step 部署
+
+## 5.0 跨平台一键脚本（推荐入口）
+
+如果你希望直接“一键部署 + 自动改造 OpenClaw 底层记忆链路”，优先使用以下脚本：
+
+1. Linux：`deploy/linux/one_click.sh`
+2. macOS：`deploy/macos/one_click.sh`
+3. Windows：`deploy/windows/one_click.ps1`
+
+脚本会自动执行：
+
+1. 部署 Mem0 Local API（`mem0_api.py` + Python 依赖）
+2. 注入 `mem0-hub` 插件（`~/.openclaw/extensions/mem0-hub/index.ts`）
+3. 自动补丁 `~/.openclaw/openclaw.json`
+4. 启动服务（Linux 用 systemd，macOS/Windows 生成启动脚本）
+
+Linux 快速执行：
+
+```bash
+git clone https://github.com/iqvpi1024/openclaw-mem0.git
+cd openclaw-mem0
+chmod +x deploy/linux/one_click.sh
+KIMI_API_KEY="<YOUR_KIMI_API_KEY>" OPENCLAW_PACKAGE_DIR="/abs/path/to/openclaw/package" bash deploy/linux/one_click.sh
+```
+
+macOS 快速执行：
+
+```bash
+git clone https://github.com/iqvpi1024/openclaw-mem0.git
+cd openclaw-mem0
+chmod +x deploy/macos/one_click.sh
+KIMI_API_KEY="<YOUR_KIMI_API_KEY>" OPENCLAW_PACKAGE_DIR="/abs/path/to/openclaw/package" bash deploy/macos/one_click.sh
+```
+
+Windows 快速执行（PowerShell）：
+
+```powershell
+git clone https://github.com/iqvpi1024/openclaw-mem0.git
+cd openclaw-mem0
+powershell -ExecutionPolicy Bypass -File .\deploy\windows\one_click.ps1 -OpenClawPackageDir "C:\path\to\openclaw\package" -KimiApiKey "<YOUR_KIMI_API_KEY>"
+```
 
 ## 5.1 可选：创建 4GB Swap（低内存机器建议）
 
@@ -824,24 +867,16 @@ journalctl -u mem0-local.service -n 200 --no-pager
 
 ---
 
-## 14. 你发布 GitHub 前需要填写的信息
+## 14. 开源维护建议
 
-这部分是你需要提供给我的信息，我可以继续帮你一次性补全成可公开仓库。
+建议按以下顺序维护仓库质量：
 
-请按下面字段回复：
-
-1. `repo_name`：仓库名（例如 `openclaw-mem0-primary-memory`）
-2. `repo_desc`：一句话描述（中/英文都行）
-3. `license`：`MIT` / `Apache-2.0` / `GPL-3.0`（推荐 MIT）
-4. `author_name`：作者名
-5. `contact`：邮箱或主页（可留空）
-6. `default_branch`：`main` 还是 `master`（推荐 main）
-7. `include_feishu`：是否公开飞书配置章节（`yes/no`）
-8. `include_kimi`：是否公开 Kimi 配置章节（`yes/no`）
-9. `masking_style`：脱敏风格（`<PLACEHOLDER>` 或 `***`）
-10. `language`：文档语言（`zh` 或 `bilingual`）
-11. `with_docker`：是否要我补 Docker Compose 版（`yes/no`）
-12. `with_quickstart`：是否额外生成 10 分钟极简教程（`yes/no`）
+1. 发布版本标签：按 `vX.Y.Z` 打 tag，并在 Release 写清兼容的 OpenClaw 版本。
+2. 固定依赖版本：`deploy/common/requirements.txt` 与脚本中的关键版本保持同步。
+3. 自动脱敏检查：CI 中增加 `rg` 规则，阻断明文密钥提交。
+4. 最小化破坏更新：对 `patch_openclaw_config.mjs` 变更必须附兼容说明。
+5. 常见问题回归：每次改动后跑 `memory/add + memory/search + /new` 三段验证。
+6. 多平台回归：至少在 Linux/macOS 上验证一键脚本，Windows 脚本保持参数一致性。
 
 ---
 
@@ -862,8 +897,6 @@ MIT License
 - `CONTRIBUTING.md`
 - `SECURITY.md`
 - `CODE_OF_CONDUCT.md`
-
-如果你确认，我可以下一步直接帮你生成这 3 个文件模板。
 
 ---
 
