@@ -2,6 +2,16 @@
 
 本目录提供跨平台一键部署脚本，目标是直接把 OpenClaw 改造成 Mem0 First 记忆链路。
 
+> ⚠️ 这些脚本尚未覆盖所有系统组合与 OpenClaw 版本，生产环境请先备份再执行。
+
+推荐做法：先把仓库交给 Codex / Claude Code 按“备份 -> dry-run -> 执行 -> 验收 -> 回滚说明”流程运行，不建议直接盲跑脚本。
+
+## 执行前先备份（强烈建议）
+
+1. 备份 `~/.openclaw`
+2. 备份 `~/mem0-local`（或 `%USERPROFILE%\\mem0-local`）
+3. 备份 OpenClaw 安装目录与配置目录
+
 ## Linux
 
 ```bash

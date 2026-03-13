@@ -12,6 +12,8 @@
 
 > 时间基准：2026-03-13（本文所有命令与版本按该日期实测）。
 
+> ⚠️ 风险声明：仓库的一键脚本是加速器，不是全平台全版本验证后的银弹。已有生产环境的用户必须先备份，再执行改造。
+
 ---
 
 ## 目录
@@ -103,6 +105,27 @@ flowchart LR
 - 通过 sidecar 把请求转发到中心 Mem0，实现跨设备共享记忆。
 - 共享是否成功的关键不是网络，而是 `user_id` 统一策略（第 7 章详细说明）。
 
+### 3.3 生产稳态架构（推荐）
+
+```mermaid
+flowchart LR
+    U[Client: Feishu/CLI/API] --> G[OpenClaw Gateway]
+    G --> P[mem0-hub Plugin]
+    P --> S[mem0-sidecar 127.0.0.1]
+    S --> M[Central Mem0 API]
+    M --> Q[(Qdrant Cluster)]
+    M --> H[(History DB)]
+    M --> O[Logs/Metrics/Alert]
+    G --> L[Kimi/LLM]
+```
+
+设计要点：
+
+1. `OpenClaw -> sidecar` 固定本地 loopback，降低部署差异。
+2. `sidecar -> central mem0` 统一做鉴权、重试、超时和熔断。
+3. 向量库与历史库独立部署，避免互相拖慢。
+4. 加可观测性（检索命中率、写入失败率、user_id 漂移告警）。
+
 ---
 
 ## 4. 环境基线与目录规范
@@ -147,6 +170,48 @@ cd /root/mem0-local
 ## 5. Step-by-Step 部署
 
 ## 5.0 跨平台一键脚本（推荐入口）
+
+> ⚠️ 注意：脚本未覆盖所有系统组合与 OpenClaw 版本。线上环境优先使用“备份 + AI 代理分步执行”。
+
+### 5.0.1 执行前先备份（强烈建议）
+
+Linux/macOS：
+
+```bash
+set -euo pipefail
+TS="$(date +%Y%m%d-%H%M%S)"
+BK_DIR="$HOME/openclaw-backup-$TS"
+mkdir -p "$BK_DIR"
+[ -d "$HOME/.openclaw" ] && cp -a "$HOME/.openclaw" "$BK_DIR/.openclaw"
+[ -d "$HOME/mem0-local" ] && cp -a "$HOME/mem0-local" "$BK_DIR/mem0-local"
+echo "backup done: $BK_DIR"
+```
+
+Windows PowerShell：
+
+```powershell
+$ts = Get-Date -Format "yyyyMMdd-HHmmss"
+$bk = "$env:USERPROFILE\\openclaw-backup-$ts"
+New-Item -ItemType Directory -Force -Path $bk | Out-Null
+if (Test-Path "$env:USERPROFILE\\.openclaw") { Copy-Item -Recurse -Force "$env:USERPROFILE\\.openclaw" "$bk\\.openclaw" }
+if (Test-Path "$env:USERPROFILE\\mem0-local") { Copy-Item -Recurse -Force "$env:USERPROFILE\\mem0-local" "$bk\\mem0-local" }
+Write-Host "backup done: $bk"
+```
+
+### 5.0.2 推荐傻瓜流程：给 Codex/Claude Code 的提示词
+
+```text
+请以“最小风险”方式把当前 OpenClaw 改造成 Mem0 First。
+严格按以下顺序执行并输出每一步结果：
+1) 先检查并备份：~/.openclaw、mem0-local、openclaw-work（若存在）
+2) 阅读 README.md、deploy/README.md、OPENCLAW_MEM0_部署与记忆优化全流程手册.md
+3) 不直接盲跑一键脚本；先 dry-run 说明将修改哪些文件
+4) 再执行对应系统脚本（linux/macos/windows）
+5) 校验 openclaw.json、mem0_api.py、mem0-hub/index.ts 是否已正确注入
+6) 执行 /health、memory/add、memory/search 验收
+7) 给出回滚命令（基于备份目录）
+8) 按严重程度输出问题和修复建议
+```
 
 如果你希望直接“一键部署 + 自动改造 OpenClaw 底层记忆链路”，优先使用以下脚本：
 

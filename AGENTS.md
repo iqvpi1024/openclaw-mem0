@@ -21,15 +21,16 @@
 
 ## 代理执行优先顺序
 
-1. 检查服务状态：`ensure-swap-4g.service`、`openclaw-gateway.service`、`mem0-local.service`
-2. 验证配置：
+1. 先备份：`~/.openclaw`、`mem0-local`、OpenClaw 安装目录（若存在）
+2. 检查服务状态：`ensure-swap-4g.service`、`openclaw-gateway.service`、`mem0-local.service`
+3. 验证配置：
    - OpenClaw: `~/.openclaw/openclaw.json`
    - Mem0: `/root/mem0-local/.env`
-3. 验证链路：
+4. 验证链路：
    - `GET /health`
    - `POST /memory/add`
    - `POST /memory/search`
-4. 查看日志：
+5. 查看日志：
    - `journalctl -u openclaw-gateway.service -n 200 --no-pager`
    - `journalctl -u mem0-local.service -n 200 --no-pager`
 
@@ -39,6 +40,7 @@
 2. 不得把 `plugins.slots.memory` 设置为 `mem0-hub`（应为 `none`）。
 3. 不得恢复旧 memory tool 路径（`memory_search/memory_get/memory_add`）。
 4. 低配机器默认并发必须保守（workers=1, maxConcurrent=1）。
+5. 对一键脚本先 dry-run 说明改动，再执行。
 
 ## 常见问题判定
 

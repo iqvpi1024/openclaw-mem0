@@ -36,6 +36,9 @@ need_cmd node
 need_cmd python3
 need_cmd curl
 
+echo "[WARN] one_click.sh is not fully validated across all OpenClaw/system combinations."
+echo "[WARN] Backup recommended before continue: ~/.openclaw, ~/mem0-local, OpenClaw install dir."
+
 OPENCLAW_PACKAGE_DIR="$(detect_openclaw_dir || true)"
 if [ -z "${OPENCLAW_PACKAGE_DIR}" ]; then
   echo "[ERROR] openclaw.mjs not found. Export OPENCLAW_PACKAGE_DIR first." >&2

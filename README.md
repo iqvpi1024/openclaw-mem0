@@ -16,6 +16,9 @@
 
 > 一句话：把 OpenClaw 从“会话记忆”升级成“Mem0 第一记忆源”，让记忆检索和回写变成后端强制动作。
 
+> ⚠️ 安全声明：仓库中的跨平台一键脚本尚未在所有系统组合上做全量回归（尤其是不同版本的 OpenClaw / Windows 环境）。
+> 生产环境建议优先使用“备份 + AI 代理按步骤执行”的方式落地，而不是直接盲跑脚本。
+
 ## 痛点暴击
 
 | 场景 | 传统 OpenClaw（依赖 `soul.md`/上下文） | 本项目（Mem0 第一记忆源） |
@@ -37,6 +40,27 @@ flowchart LR
     B --> F[Kimi K2.5]
 ```
 
+## 架构优化（推荐生产版）
+
+```mermaid
+flowchart LR
+    U[Feishu / CLI / API] --> G[OpenClaw Gateway]
+    G --> H[mem0-hub]
+    H --> S[mem0-sidecar 127.0.0.1]
+    S --> M[Central Mem0 API]
+    M --> Q[(Qdrant Cluster)]
+    M --> R[(History DB)]
+    M --> O[Observability: logs/metrics]
+    G --> L[Kimi / LLM Provider]
+```
+
+优化点：
+
+1. `OpenClaw -> mem0-sidecar` 仍固定本地 `127.0.0.1`，降低链路变更风险。
+2. `sidecar -> central mem0` 统一鉴权、超时、重试和熔断。
+3. 向量库与历史库独立，避免单点和资源互抢。
+4. 增加可观测性，定位“失忆”问题更快（检索失败、user_id 漂移、写入失败）。
+
 核心机制：
 
 1. 拦截 `message_received`，异步写入 Mem0（语义提炼后存储）。
@@ -56,22 +80,63 @@ flowchart LR
 
 这样你在 Mac 说过的话，Linux 上新会话也能被召回。
 
-## 给 Claude Code / Codex 的直接执行方式
+## 推荐傻瓜流程（先备份，再让 AI 代理执行）
+
+如果你已经在生产环境使用 OpenClaw，建议先备份，再执行改造。
+
+### 1) 备份现有 OpenClaw 关键数据
+
+Linux/macOS:
+
+```bash
+set -euo pipefail
+TS="$(date +%Y%m%d-%H%M%S)"
+BK_DIR="$HOME/openclaw-backup-$TS"
+mkdir -p "$BK_DIR"
+
+[ -d "$HOME/.openclaw" ] && cp -a "$HOME/.openclaw" "$BK_DIR/.openclaw"
+[ -d "$HOME/mem0-local" ] && cp -a "$HOME/mem0-local" "$BK_DIR/mem0-local"
+[ -d "$HOME/openclaw-work" ] && cp -a "$HOME/openclaw-work" "$BK_DIR/openclaw-work"
+
+echo "backup done: $BK_DIR"
+```
+
+Windows PowerShell:
+
+```powershell
+$ts = Get-Date -Format "yyyyMMdd-HHmmss"
+$bk = "$env:USERPROFILE\\openclaw-backup-$ts"
+New-Item -ItemType Directory -Force -Path $bk | Out-Null
+
+if (Test-Path "$env:USERPROFILE\\.openclaw") { Copy-Item -Recurse -Force "$env:USERPROFILE\\.openclaw" "$bk\\.openclaw" }
+if (Test-Path "$env:USERPROFILE\\mem0-local") { Copy-Item -Recurse -Force "$env:USERPROFILE\\mem0-local" "$bk\\mem0-local" }
+if (Test-Path "$env:USERPROFILE\\openclaw-work") { Copy-Item -Recurse -Force "$env:USERPROFILE\\openclaw-work" "$bk\\openclaw-work" }
+
+Write-Host "backup done: $bk"
+```
+
+### 2) 把下面提示词直接给 Claude Code / Codex
 
 把下面这段直接贴给你的智能编码代理（在仓库根目录执行）：
 
 ```text
-请阅读当前仓库 README.md 与 OPENCLAW_MEM0_部署与记忆优化全流程手册.md，
-按文档完成以下动作：
-1) 检查 openclaw + mem0 服务状态
-2) 校验 openclaw.json / mem0 .env 的关键配置项
-3) 执行记忆写入与检索验收命令
-4) 输出当前问题与修复建议（按严重程度排序）
+请以“最小风险”方式把当前 OpenClaw 改造成 Mem0 First。
+严格按以下顺序执行并输出每一步结果：
+1) 先检查并备份：~/.openclaw、mem0-local、openclaw-work（若存在）
+2) 读取 README.md、deploy/README.md、OPENCLAW_MEM0_部署与记忆优化全流程手册.md
+3) 不直接盲跑一键脚本；先 dry-run 说明将修改哪些文件
+4) 再执行对应系统脚本（linux/macos/windows）
+5) 校验 openclaw.json、mem0_api.py、mem0-hub/index.ts 是否已正确注入
+6) 执行 /health、memory/add、memory/search 验收
+7) 给出回滚命令（基于备份目录）
+8) 按严重程度输出发现的问题和修复建议
 ```
 
-这套文档就是按“AI 代理可直接执行”的结构写的，不需要二次整理。
+这是当前最稳妥、最傻瓜的落地方式。
 
 ## 一键部署（Linux / macOS / Windows）
+
+> ⚠️ 注意：脚本是“加速器”，不是“银弹”。如果你的 OpenClaw 已上线，建议先按上面的备份+代理流程执行。
 
 脚本会自动完成：
 

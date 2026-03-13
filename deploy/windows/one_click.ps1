@@ -39,6 +39,9 @@ Require-Cmd node
 Require-Cmd python
 Require-Cmd curl
 
+Write-Host "[WARN] one_click.ps1 is not fully validated across all OpenClaw/system combinations."
+Write-Host "[WARN] Backup recommended before continue: %USERPROFILE%\\.openclaw, %USERPROFILE%\\mem0-local, OpenClaw install dir."
+
 $OpenClawPackageDir = Detect-OpenClawDir -Preferred $OpenClawPackageDir
 if (-not $OpenClawPackageDir) {
   throw "openclaw.mjs not found. Please pass -OpenClawPackageDir"
